@@ -1,0 +1,82 @@
+name: Deployment pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize]
+
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install dependencies
+        run: npm install
+      - name: Check style
+        run: npm run lint
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test
+
+  deploy:
+    needs: [build_and_test]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && !contains(join(github.event.commits.*.message), '#skip')
+    steps:
+      - name: Trigger Render deployment
+        run: curl -X POST ${{ secrets.RENDER_DEPLOY_HOOK }}
+
+  tag_release:
+    needs: [build_and_test]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && !contains(join(github.event.commits.*.message), '#skip')
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Bump version and push tag
+        uses: anothrNick/github-tag-action@1.75.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BUMP: patch
+
+  notify_success:
+    needs: [deploy, tag_release]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && success()
+    steps:
+      - name: Discord success notification
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK }}
+          title: "✅ Deployment successful!"
+          description: |
+            A new version of Zustand Anecdotes has been deployed.
+            **Commit:** ${{ github.sha }}
+            **Message:** ${{ github.event.head_commit.message }}
+            **Author:** ${{ github.event.head_commit.author.name }}
+
+  notify_failure:
+    needs: [build_and_test]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && failure()
+    steps:
+      - name: Discord failure notification
+        uses: sarisia/actions-status-discord@v1
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK }}
+          title: "❌ Build Failed!"
+          description: |
+            The pipeline encountered an error.
+            **Commit:** ${{ github.sha }}
+            **Message:** ${{ github.event.head_commit.message }}
+            **Author:** ${{ github.event.head_commit.author.name }}
+            **Check the logs:** ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          color: 0xff0000
